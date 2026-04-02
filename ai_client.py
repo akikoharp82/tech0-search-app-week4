@@ -1,46 +1,110 @@
+"""
+ai_client.py — Tech0 Search v1.0
+
+生成AIを使って
+・検索結果の要約
+・新規事業提案
+を行うモジュール
+"""
+
+import os
 from openai import OpenAI
+from dotenv import load_dotenv
 
-def generate_ai_summary(query: str, search_results: list, api_key: str) -> str:
 
-    if not api_key:
-        return "APIキーが設定されていません"
+# ── 環境変数読み込み ─────────────────────────────
+load_dotenv()
 
+api_key = os.getenv("OPENAI_API_KEY")
+
+if not api_key:
+    raise ValueError("OPENAI_API_KEY が設定されていません")
+
+client = OpenAI(api_key=api_key)
+
+
+# ── メイン関数 ─────────────────────────────
+def generate_ai_summary(query: str, search_results: list, mode: str = "summary") -> str:
+    """
+    AIで要約 or 新規事業提案を生成する
+
+    Parameters:
+        query           : 検索キーワード
+        search_results  : 検索結果（list）
+        mode            : "summary" or "business"
+    """
+
+    # ── ガード処理 ─────────────────────────
     if not search_results:
-        return "検索結果がありません"
+        return "検索結果がないため、生成できませんでした。"
 
-    client = OpenAI(api_key=api_key)
-
+    # ── コンテキスト生成 ───────────────────
     context_lines = []
 
     for i, page in enumerate(search_results[:5], start=1):
         context_lines.append(
-            f"{i}. タイトル: {page.get('title', '')}\n"
-            f"   説明: {page.get('description', '')}\n"
-            f"   本文: {page.get('full_text', '')[:200]}"
+            f"""
+{i}.
+タイトル: {page.get('title', '')}
+説明: {page.get('description', '')}
+本文: {page.get('full_text', '')[:300]}
+URL: {page.get('url', '')}
+"""
         )
 
-    context_text = "\n\n".join(context_lines)
+    context_text = "\n".join(context_lines)
 
-    prompt = f"""
-あなたは半導体メーカーの新規事業企画担当です。
+    # ── プロンプト分岐 ─────────────────────
+    if mode == "summary":
 
-キーワード:
+        prompt = f"""
+あなたは優秀なコンサルタントです。
+以下の検索結果をもとに、日本語で要点を整理してください。
+
+【検索キーワード】
 {query}
 
-情報:
+【検索結果】
 {context_text}
 
-以下を出してください：
-
-① 技術トレンド
-② 市場機会
-③ 新規事業案
-④ 次のアクション
+【出力形式】
+① 要点（3つ）
+② 重要な示唆
+③ 次に取るべきアクション
 """
 
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        input=prompt
-    )
+    elif mode == "business":
 
-    return response.output_text
+        prompt = f"""
+あなたは半導体メーカーの新規事業責任者です。
+以下の検索結果をもとに、新規事業を提案してください。
+
+【検索キーワード】
+{query}
+
+【検索結果】
+{context_text}
+
+【出力形式】
+① 技術トレンド
+② 市場機会
+③ 顧客課題
+④ 新規事業アイデア（具体）
+⑤ ビジネスモデル（収益構造）
+⑥ 差別化ポイント
+"""
+
+    else:
+        return "エラー：不正なモードです"
+
+    # ── OpenAI 実行 ───────────────────────
+    try:
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=prompt,
+        )
+
+        return response.output_text
+
+    except Exception as e:
+        return f"AI生成中にエラーが発生しました: {str(e)}"
