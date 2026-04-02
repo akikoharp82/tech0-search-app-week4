@@ -9,6 +9,14 @@ from database import init_db, get_all_pages, insert_page, log_search
 from ranking import get_engine, rebuild_index
 from crawler import crawl_url
 from ai_client import generate_ai_summary
+import os
+from dotenv import load_dotenv
+
+# .envを読み込む
+load_dotenv()
+
+# APIキー取得
+api_key = os.getenv("OPENAI_API_KEY")
 
 # アプリ起動時に DB を初期化する（テーブルが未作成なら作る）
 init_db()
@@ -22,8 +30,6 @@ st.set_page_config(
 # ── キャッシュ付きインデックス構築 ─────────────────────────────
 @st.cache_resource
 def load_and_index():
-    """全ページを DB から読み込み TF-IDF インデックスを構築する。
-    @st.cache_resource により、アプリ起動中は一度だけ実行される。"""
     pages = get_all_pages()
     if pages:
         rebuild_index(pages)
@@ -39,6 +45,12 @@ st.caption("PROJECT ZERO — 社内ナレッジ検索エンジン【TF-IDFラン
 with st.sidebar:
     st.header("DB の状態")
     st.metric("登録ページ数", f"{len(pages)} 件")
+
+    if api_key:
+        st.success("OpenAI APIキー読み込みOK")
+    else:
+        st.warning("OpenAI APIキーが設定されていません")
+
     if st.button("🔄 インデックスを更新"):
         st.cache_resource.clear()
         st.rerun()
@@ -54,8 +66,11 @@ with tab_search:
 
     col_search, col_options = st.columns([3, 1])
     with col_search:
-        query = st.text_input("🔍 キーワードを入力", placeholder="例: DX, IoT, 製造業",
-                              label_visibility="collapsed")
+        query = st.text_input(
+            "🔍 キーワードを入力",
+            placeholder="例: DX, IoT, 製造業",
+            label_visibility="collapsed"
+        )
     with col_options:
         top_n = st.selectbox("表示件数", [10, 20, 50], index=0)
 
@@ -66,9 +81,10 @@ with tab_search:
         st.markdown(f"**📊 検索結果：{len(results)} 件**（TF-IDFスコア順）")
 
         if results:
-            if st.button("🤖 AIで要点整理"):
+            if st.button("🤖 AIで要点整理＋事業提案"):
                 with st.spinner("AIが検索結果を整理しています..."):
-                    ai_summary = generate_ai_summary(query, results)
+                    # 🔥 修正ポイント：api_keyを渡す
+                    ai_summary = generate_ai_summary(query, results, api_key)
 
                 st.subheader("AI要約・提案")
                 st.write(ai_summary)
@@ -79,16 +95,20 @@ with tab_search:
             for i, page in enumerate(results, 1):
                 with st.container():
                     col_rank, col_title, col_score = st.columns([0.5, 4, 1])
+
                     with col_rank:
-                        # 上位3件にはメダルを表示する
                         medal = ["🥇", "🥈", "🥉"][i - 1] if i <= 3 else str(i)
                         st.markdown(f"### {medal}")
+
                     with col_title:
                         st.markdown(f"### {page['title']}")
+
                     with col_score:
-                        # relevance_score（最終スコア）と base_score（TF-IDFのみ）を両方表示
-                        st.metric("スコア", f"{page['relevance_score']}",
-                                  delta=f"基準: {page['base_score']}")
+                        st.metric(
+                            "スコア",
+                            f"{page['relevance_score']}",
+                            delta=f"基準: {page['base_score']}"
+                        )
 
                     desc = page.get("description", "")
                     if desc:
@@ -101,10 +121,14 @@ with tab_search:
                         st.markdown(f"🏷️ {tags}")
 
                     col1, col2, col3, col4 = st.columns(4)
-                    with col1: st.caption(f"👤 {page.get('author', '不明') or '不明'}")
-                    with col2: st.caption(f"📊 {page.get('word_count', 0)} 語")
-                    with col3: st.caption(f"📁 {page.get('category', '未分類') or '未分類'}")
-                    with col4: st.caption(f"📅 {(page.get('crawled_at', '') or '')[:10]}")
+                    with col1:
+                        st.caption(f"👤 {page.get('author', '不明') or '不明'}")
+                    with col2:
+                        st.caption(f"📊 {page.get('word_count', 0)} 語")
+                    with col3:
+                        st.caption(f"📁 {page.get('category', '未分類') or '未分類'}")
+                    with col4:
+                        st.caption(f"📅 {(page.get('crawled_at', '') or '')[:10]}")
 
                     st.markdown(f"🔗 [{page['url']}]({page['url']})")
                     st.divider()
@@ -147,7 +171,10 @@ with tab_crawl:
                         col1, col2 = st.columns(2)
                         with col1:
                             title = result.get('title', '')
-                            st.metric("📄 タイトル", (title[:30] + "...") if len(title) > 30 else title)
+                            st.metric(
+                                "📄 タイトル",
+                                (title[:30] + "...") if len(title) > 30 else title
+                            )
                         with col2:
                             st.metric("📊 文字数", f"{result.get('word_count', 0)}語")
 
@@ -185,10 +212,14 @@ with tab_list:
             with st.expander(f"📄 {page['title']}"):
                 st.markdown(f"**URL：** {page['url']}")
                 st.markdown(f"**説明：** {page.get('description', '（なし）') or '（なし）'}")
+
                 col1, col2, col3 = st.columns(3)
-                with col1: st.caption(f"語数：{page.get('word_count', 0)}")
-                with col2: st.caption(f"作成者：{page.get('author', '不明') or '不明'}")
-                with col3: st.caption(f"カテゴリ：{page.get('category', '未分類') or '未分類'}")
+                with col1:
+                    st.caption(f"語数：{page.get('word_count', 0)}")
+                with col2:
+                    st.caption(f"作成者：{page.get('author', '不明') or '不明'}")
+                with col3:
+                    st.caption(f"カテゴリ：{page.get('category', '未分類') or '未分類'}")
 
 st.divider()
 st.caption("© 2025 PROJECT ZERO — Tech0 Search v1.0 | Powered by TF-IDF")
