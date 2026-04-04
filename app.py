@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 from database import init_db, get_all_pages, insert_page, log_search
 from ranking import get_engine, rebuild_index
-from crawler import crawl_url
+from crawler import crawl_url, extract_links_from_index # 追加0404
 from ai_client import generate_ai_summary
 
 
@@ -28,8 +28,8 @@ api_key = os.getenv("OPENAI_API_KEY")
 init_db()
 
 st.set_page_config(
-    page_title="Tech0 Search v1.0",
-    page_icon="🔍",
+    page_title="TechZeron Future Design",
+    page_icon="🚀",
     layout="wide"
 )
 
@@ -86,6 +86,28 @@ if "global_summary" not in st.session_state:
 if "global_business" not in st.session_state:
     st.session_state.global_business = ""
 
+# 追加0404
+if "extracted_urls" not in st.session_state:
+    st.session_state.extracted_urls = []
+
+if "extracted_category" not in st.session_state:
+    st.session_state.extracted_category = ""
+
+if "crawl_success" not in st.session_state:
+    st.session_state.crawl_success = False
+
+if "bulk_crawl_success" not in st.session_state:
+    st.session_state.bulk_crawl_success = False
+
+if "bulk_crawl_success_count" not in st.session_state:
+    st.session_state.bulk_crawl_success_count = 0
+
+if "index_url_input" not in st.session_state:
+    st.session_state["index_url_input"] = ""
+
+if "category_name_input" not in st.session_state:
+    st.session_state["category_name_input"] = ""
+# 追加0404 ここまで
 
 # ── サイドバー ─────────────────────────────────────────
 with st.sidebar:
@@ -103,8 +125,8 @@ with st.sidebar:
 
 
 # ── ヘッダー ───────────────────────────────────────────
-st.title("🔍 Tech0 Search v1.0")
-st.caption("PROJECT ZERO — 社内ナレッジ検索エンジン【TF-IDFランキング搭載】")
+st.title("🚀 TechZeron Future Design")
+st.caption("社内ナレッジと外部トレンドを融合し、意思決定を高速化する「社内知見活用アシスタント」")
 
 
 # ── タブ ───────────────────────────────────────────────
@@ -315,31 +337,183 @@ with tab_search:
 # ── クローラータブ ─────────────────────────────────────
 with tab_crawl:
     st.subheader("クローラー")
+    st.caption("単体クロール・一括クロール・一覧URL抽出に対応")
 
-    urls_input = st.text_area(
-        "URL入力",
-        placeholder="URLを改行またはスペース区切りで入力してください"
-    )
+    if st.session_state.get("crawl_success"):
+        st.success("登録完了しました。")
+        st.session_state["crawl_success"] = False
 
-    if st.button("実行"):
-        urls = re.split(r"\s+", urls_input.strip())
+    if st.session_state.get("bulk_crawl_success"):
+        count = st.session_state.get("bulk_crawl_success_count", 0)
+        st.success(f"{count}件の登録が完了しました。")
+        st.session_state["bulk_crawl_success"] = False
 
-        success_count = 0
-        fail_count = 0
+    # -----------------------------
+    # 単体クロール
+    # -----------------------------
+    st.subheader("🌀 単体クロール")
 
-        for url in urls:
-            if url.startswith("http"):
-                data = crawl_url(url)
+    with st.form("single_crawl_form", clear_on_submit=True):
+        crawl_url_input = st.text_input(
+            "クロール対象URL",
+            placeholder="https://example.com"
+        )
+        single_submitted = st.form_submit_button("クロール実行")
 
-                if data and data.get("crawl_status") == "success":
-                    insert_page(data)
-                    success_count += 1
+    if single_submitted:
+        target_url = crawl_url_input.strip()
+
+        if not target_url:
+            st.warning("URLを入力してください。")
+        else:
+            with st.spinner("クロール中です..."):
+                result = crawl_url(target_url)
+
+            if result.get("crawl_status") == "success":
+                insert_page(result)
+                st.cache_resource.clear()
+                st.session_state["crawl_success"] = True
+                st.rerun()
+            else:
+                st.error(f"クロールに失敗しました: {result.get('error', 'Unknown error')}")
+
+    st.divider()
+
+    # -----------------------------
+    # 一括クロール
+    # -----------------------------
+    st.subheader("🕸️ 一括クロール")
+
+    with st.form("bulk_crawl_form", clear_on_submit=True):
+        bulk_urls = st.text_area(
+            "URLリスト（1行に1URL）",
+            placeholder="https://example1.com\nhttps://example2.com",
+            height=180
+        )
+        bulk_submitted = st.form_submit_button("一括クロール実行")
+
+    if bulk_submitted:
+        url_list = [u.strip() for u in bulk_urls.splitlines() if u.strip()]
+
+        if not url_list:
+            st.warning("URLを1件以上入力してください。")
+        else:
+            success_count = 0
+            fail_urls = []
+
+            with st.spinner("一括クロール中です..."):
+                for url in url_list:
+                    result = crawl_url(url)
+
+                    if result.get("crawl_status") == "success":
+                        insert_page(result)
+                        success_count += 1
+                    else:
+                        fail_urls.append(url)
+
+            st.cache_resource.clear()
+
+            if success_count > 0:
+                st.session_state["bulk_crawl_success"] = True
+                st.session_state["bulk_crawl_success_count"] = success_count
+
+            if fail_urls:
+                st.warning("一部失敗したURLがあります。")
+                st.code("\n".join(fail_urls))
+
+            st.rerun()
+
+    st.divider()
+
+    # -----------------------------
+    # 一覧URL抽出
+    # -----------------------------
+    st.subheader("🧭 一覧URL抽出")
+
+    with st.form("index_extract_form", clear_on_submit=False):
+        index_url = st.text_input(
+            "インデックスページURL",
+            placeholder="https://www.rdsc.co.jp/search/index?sch_tag_id=73",
+            key="index_url_input"
+        )
+        category_name = st.text_input(
+            "カテゴリ名",
+            placeholder="例：半導体",
+            key="category_name_input"
+        )
+        extract_submitted = st.form_submit_button("一覧からURL抽出")
+
+    if extract_submitted:
+        if not index_url.strip():
+            st.warning("インデックスページURLを入力してください。")
+        else:
+            with st.spinner("一覧ページからURLを抽出しています..."):
+                extract_result = extract_links_from_index(
+                    index_url=index_url.strip(),
+                    keyword=category_name.strip(),
+                    limit=200
+                )
+
+            if extract_result.get("extract_status") == "success":
+                st.session_state["extracted_urls"] = extract_result.get("extracted_urls", [])
+                st.session_state["extracted_category"] = category_name.strip()
+
+                total_found = extract_result.get("total_found", 0)
+                count = extract_result.get("count", 0)
+                truncated = extract_result.get("truncated", False)
+
+                if truncated:
+                    st.success(f"{total_found}件見つかりました。上限により先頭{count}件を抽出しました。")
                 else:
-                    fail_count += 1
+                    st.success(f"{count}件のURLを抽出しました。")
+            else:
+                st.error(f"URL抽出に失敗しました: {extract_result.get('error', 'Unknown error')}")
+#修正0404 ここまで
+    extracted_urls = st.session_state.get("extracted_urls", [])
 
-        st.success(f"登録完了：成功 {success_count} 件 / 失敗 {fail_count} 件")
-        st.cache_resource.clear()
-        st.rerun()
+    if extracted_urls:
+        st.markdown(f"**抽出URL一覧：{len(extracted_urls)}件**")
+        st.code("\n".join(extracted_urls[:100]))
+
+        if len(extracted_urls) > 100:
+            st.caption("表示は先頭100件までです。")
+
+        if st.button("抽出したURLを一括クロール"):
+            success_count = 0
+            fail_urls = []
+            category_value = st.session_state.get("extracted_category", "").strip()
+
+            with st.spinner("抽出済みURLを一括クロール中です..."):
+                for url in extracted_urls:
+                    result = crawl_url(url)
+
+                    if result.get("crawl_status") == "success":
+                        if category_value:
+                            result["category"] = category_value
+                        insert_page(result)
+                        success_count += 1
+                    else:
+                        fail_urls.append(url)
+
+            st.cache_resource.clear()
+
+            if success_count > 0:
+                st.session_state["bulk_crawl_success"] = True
+                st.session_state["bulk_crawl_success_count"] = success_count
+
+                # 抽出結果だけクリア
+                st.session_state["extracted_urls"] = []
+                st.session_state["extracted_category"] = ""
+                st.session_state["extracted_page"] = 1
+
+            if fail_urls:
+                st.warning("一部失敗したURLがあります。")
+                st.code("\n".join(fail_urls[:20]))
+            
+            st.session_state["extracted_urls"] = []
+            st.session_state["extracted_category"] = ""
+
+            st.rerun()
 
 
 # ── 一覧タブ ───────────────────────────────────────────
