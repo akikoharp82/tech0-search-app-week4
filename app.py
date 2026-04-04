@@ -33,6 +33,13 @@ st.set_page_config(
     layout="wide"
 )
 
+# ====(ふかさん)仮想環境で検索エンジンを再構築できるように設定==================
+
+from ranking import get_engine, rebuild_index
+pages = get_all_pages()
+rebuild_index(pages)
+
+# =========================================================================
 
 # ── キャッシュ付きインデックス構築 ─────────────────────
 @st.cache_resource
