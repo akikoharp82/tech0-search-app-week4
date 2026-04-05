@@ -12,15 +12,16 @@ import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# ── 環境変数読み込み ─────────────────────────────
 load_dotenv()
 
-api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+api_key = None
 
-if not api_key:
-    raise ValueError("OPENAI_API_KEY が設定されていません")
+try:
+    api_key = st.secrets["OPENAI_API_KEY"]
+except Exception:
+    api_key = os.getenv("OPENAI_API_KEY")
 
-client = OpenAI(api_key=api_key)
+client = OpenAI(api_key=api_key) if api_key else None
 
 
 # ── メイン関数 ─────────────────────────────
