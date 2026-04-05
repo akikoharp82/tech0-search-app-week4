@@ -36,6 +36,9 @@ def generate_ai_summary(query: str, search_results: list, mode: str = "summary")
     """
 
     # ── ガード処理 ─────────────────────────
+    if client is None:
+        return "AI要約は現在利用できません。OPENAI_API_KEY を確認してください。"
+    
     if not search_results:
         return "検索結果がないため、生成できませんでした。"
 
