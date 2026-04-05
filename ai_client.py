@@ -8,14 +8,14 @@ ai_client.py — Tech0 Search v1.0
 """
 
 import os
+import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
-
 
 # ── 環境変数読み込み ─────────────────────────────
 load_dotenv()
 
-api_key = os.getenv("OPENAI_API_KEY")
+api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 
 if not api_key:
     raise ValueError("OPENAI_API_KEY が設定されていません")
