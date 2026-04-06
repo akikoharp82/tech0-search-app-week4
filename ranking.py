@@ -1,158 +1,238 @@
 """
-ranking.py — Tech0 Search v1.0
-TF-IDF ベースの検索エンジン（SearchEngine クラス）を提供する。
+ranking.py — Tech0 Search v2.0
+日本語の部分一致に強い検索 + ランキング版
 """
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from typing import List
-import math
 from datetime import datetime
 
 
 class SearchEngine:
-    """TF-IDFベースの検索エンジン"""
+    """日本語向けの検索エンジン"""
 
     def __init__(self):
-        # TF-IDF ベクトライザーを初期化する
+        # 日本語の複合語・部分一致に強い設定
         self.vectorizer = TfidfVectorizer(
-            max_features=5000,
-            ngram_range=(1, 2),  # ユニグラム（1語）とバイグラム（隣り合う2語のまとまり）を両方使う
+            max_features=8000,
+            analyzer="char",
+            ngram_range=(2, 4),
             min_df=1,
-            max_df=0.95,
-            sublinear_tf=True    # TF の対数スケーリング
+            max_df=0.98,
+            sublinear_tf=True
         )
-        self.tfidf_matrix = None  # インデックス（後で構築）
-        self.pages = []           # 元のページデータを保持
-        self.is_fitted = False    # インデックスが構築済みかのフラグ
+        self.tfidf_matrix = None
+        self.pages = []
+        self.is_fitted = False
 
     def build_index(self, pages: list):
         """
-        全ページの TF-IDF インデックスを構築する。
-
-        Args:
-            pages: ページ情報の辞書リスト
+        全ページのインデックスを構築する。
         """
         if not pages:
+            self.pages = []
+            self.tfidf_matrix = None
+            self.is_fitted = False
             return
 
         self.pages = pages
-
-        # 各ページの「検索対象テキスト」を組み立てる
-        # タイトル・説明・キーワードに重みを付けるため、文字列を繰り返す
         corpus = []
+
         for p in pages:
-            # keywords がカンマ区切り文字列の場合はリストに変換する
             kw = p.get("keywords", "") or ""
             if isinstance(kw, str):
                 kw_list = [k.strip() for k in kw.split(",") if k.strip()]
             else:
-                kw_list = kw
+                kw_list = [str(k).strip() for k in kw if str(k).strip()]
 
-            # 重みづけを実施。タイトルは 3倍、説明は 2倍、キーワードは 2倍の重みを付ける
-            text = " ".join([
-                (p.get("title", "") + " ") * 3,        # タイトルは3倍
-                (p.get("description", "") + " ") * 2,  # 説明は2倍
-                (p.get("full_text", "") + " "),         # 本文
-                (" ".join(kw_list) + " ") * 2,          # キーワードは2倍
+            title = p.get("title", "") or ""
+            description = p.get("description", "") or ""
+            full_text = p.get("full_text", "") or ""
+            keywords_text = " ".join(kw_list)
+
+            # タイトル・説明・キーワードに重みを持たせる
+            weighted_text = " ".join([
+                (title + " ") * 4,
+                (description + " ") * 2,
+                (keywords_text + " ") * 3,
+                full_text
             ])
-            corpus.append(text)
+            corpus.append(weighted_text)
 
-        # TF-IDF マトリックスを構築する
         self.tfidf_matrix = self.vectorizer.fit_transform(corpus)
         self.is_fitted = True
 
     def search(self, query: str, top_n: int = 20) -> list:
         """
-        TF-IDF ベースの検索を実行する。
-
-        Args:
-            query : 検索クエリ
-            top_n : 返す結果の最大数
-
-        Returns:
-            スコア付きの検索結果リスト
+        検索を実行する。
         """
         if not self.is_fitted or not query.strip():
             return []
 
-        # クエリをベクトル化してコサイン類似度を計算する
+        query = query.strip()
+        query_lower = query.lower()
+
         query_vec = self.vectorizer.transform([query])
         similarities = cosine_similarity(query_vec, self.tfidf_matrix)[0]
 
-        # 閾値以上のページだけ結果に含める
         results = []
+
         for idx, base_score in enumerate(similarities):
-            if base_score > 0.01:
-                page = self.pages[idx].copy()
+            page = self.pages[idx].copy()
 
-                # 追加スコアリングで最終スコアを計算する
-                final_score = self._calculate_final_score(page, base_score, query)
+            match_info = self._analyze_match(page, query_lower)
 
-                # スコアをパーセント表示用に変換する
-                page["relevance_score"] = round(float(final_score) * 100, 1)
-                page["base_score"] = round(float(base_score) * 100, 1)
+            # 候補抽出:
+            # 1) どこかに直接部分一致していれば採用
+            # 2) 直接一致がなくても類似度が少しあれば採用
+            if match_info["any_direct_match"] or base_score >= 0.004:
+                final_score = self._calculate_final_score(
+                    page=page,
+                    base_score=float(base_score),
+                    match_info=match_info
+                )
+
+                page["relevance_score"] = round(final_score, 1)
+                page["base_score"] = round(float(base_score) * 100, 2)
+                page["match_type"] = self._get_match_type_label(match_info)
+
                 results.append(page)
 
-        # スコアの高い順に並べて top_n 件を返す
-        results.sort(key=lambda x: x["relevance_score"], reverse=True)
+        results.sort(
+            key=lambda x: (
+                self._match_type_priority(x.get("match_type", "")),
+                x["relevance_score"],
+                x["base_score"]
+            ),
+            reverse=True
+        )
+
         return results[:top_n]
 
-    def _calculate_final_score(self, page: dict, base_score: float, query: str) -> float:
+    def _analyze_match(self, page: dict, query_lower: str) -> dict:
         """
-        複数の要素を組み合わせて最終スコアを計算する（内部メソッド）。
-
-        Args:
-            page: ページ情報
-            base_score: TF-IDFベーススコア
-            query: 検索クエリ
-
-        Returns:
-            最終スコア
+        どこに一致したかを解析する。
         """
-        score = base_score
-        query_lower = query.lower()
+        title = (page.get("title", "") or "").lower()
+        description = (page.get("description", "") or "").lower()
+        full_text = (page.get("full_text", "") or "").lower()
 
-        # 1. タイトルマッチボーナス
-        title = page.get("title", "").lower()
-        if query_lower == title:
-            score *= 1.8          # 完全一致：+80%
-        elif query_lower in title:
-            score *= 1.4          # 部分一致：+40%
-
-        # 2. キーワードマッチボーナス
         keywords = page.get("keywords", [])
         if isinstance(keywords, str):
-            keywords = keywords.split(",")
-        keywords_lower = [k.strip().lower() for k in keywords]
-        if query_lower in keywords_lower:
-            score *= 1.3          # キーワード一致：+30%
+            keywords_list = [k.strip().lower() for k in keywords.split(",") if k.strip()]
+        else:
+            keywords_list = [str(k).strip().lower() for k in keywords if str(k).strip()]
 
-        # 3. 新鮮度ボーナス（90日以内のページは最大 +20%）
+        title_exact = query_lower == title
+        title_partial = query_lower in title if title else False
+
+        keyword_exact = query_lower in keywords_list
+        keyword_partial = any(query_lower in k for k in keywords_list) if keywords_list else False
+
+        description_partial = query_lower in description if description else False
+        full_text_partial = query_lower in full_text if full_text else False
+
+        any_direct_match = any([
+            title_exact,
+            title_partial,
+            keyword_exact,
+            keyword_partial,
+            description_partial,
+            full_text_partial
+        ])
+
+        return {
+            "title_exact": title_exact,
+            "title_partial": title_partial,
+            "keyword_exact": keyword_exact,
+            "keyword_partial": keyword_partial,
+            "description_partial": description_partial,
+            "full_text_partial": full_text_partial,
+            "any_direct_match": any_direct_match
+        }
+
+    def _calculate_final_score(self, page: dict, base_score: float, match_info: dict) -> float:
+        """
+        最終スコアを加点式で計算する。
+        """
+        # 類似度を土台にする
+        score = base_score * 100
+
+        # タイトル一致は最優先
+        if match_info["title_exact"]:
+            score += 120
+        elif match_info["title_partial"]:
+            score += 75
+
+        # キーワード一致
+        if match_info["keyword_exact"]:
+            score += 45
+        elif match_info["keyword_partial"]:
+            score += 25
+
+        # 説明文・本文一致
+        if match_info["description_partial"]:
+            score += 18
+        if match_info["full_text_partial"]:
+            score += 6
+
+        # 直接一致がある候補を少し優遇
+        if match_info["any_direct_match"]:
+            score += 12
+
+        # 新鮮度ボーナス
         crawled_at = page.get("crawled_at", "")
         if crawled_at:
             try:
                 crawled = datetime.fromisoformat(crawled_at.replace("Z", "+00:00"))
                 days_old = (datetime.now() - crawled.replace(tzinfo=None)).days
                 if days_old <= 90:
-                    recency_bonus = 1 + (0.2 * (90 - days_old) / 90)
-                    score *= recency_bonus
+                    score += 10 * (90 - days_old) / 90
             except Exception:
                 pass
 
-        # 4. 文字数による調整
+        # 文字数調整
         word_count = page.get("word_count", 0)
         if word_count < 50:
-            score *= 0.7          # 短すぎるページは減点
-        elif word_count > 10000:
-            score *= 0.85         # 長すぎるページは少し減点
+            score -= 12
+        elif word_count < 150:
+            score -= 5
+        elif word_count > 15000:
+            score -= 8
+        elif word_count > 8000:
+            score -= 3
 
-        return score
+        return max(score, 0.0)
+
+    def _get_match_type_label(self, match_info: dict) -> str:
+        if match_info["title_exact"]:
+            return "title_exact"
+        if match_info["title_partial"]:
+            return "title_partial"
+        if match_info["keyword_exact"]:
+            return "keyword_exact"
+        if match_info["keyword_partial"]:
+            return "keyword_partial"
+        if match_info["description_partial"]:
+            return "description_partial"
+        if match_info["full_text_partial"]:
+            return "full_text_partial"
+        return "semantic_only"
+
+    def _match_type_priority(self, match_type: str) -> int:
+        priority_map = {
+            "title_exact": 7,
+            "title_partial": 6,
+            "keyword_exact": 5,
+            "keyword_partial": 4,
+            "description_partial": 3,
+            "full_text_partial": 2,
+            "semantic_only": 1,
+        }
+        return priority_map.get(match_type, 0)
 
 
-# ── シングルトン管理 ──────────────────────────────────────────
-
-# シングルトンインスタンス（モジュールレベルで保持する）
 _engine = None
 
 
@@ -165,6 +245,6 @@ def get_engine() -> SearchEngine:
 
 
 def rebuild_index(pages: List[dict]):
-    """インデックスを再構築する（新しいページが追加されたときに呼び出す）"""
+    """インデックスを再構築する"""
     engine = get_engine()
     engine.build_index(pages)
